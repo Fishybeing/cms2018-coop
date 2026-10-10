@@ -15,7 +15,7 @@ A multiplayer mod for Car Mechanic Simulator 2018. Up to 4 people work in the sa
 - Hold Shift to sprint (1.2x speed, no stamina).
 - A guest's own save is backed up when they join and restored the next time they start the game.
 
-Still rough: only the host can take jobs, money and inventory are per player, and things like the paint shop and tire changer are not synced yet (those work on your own inventory, so each player uses their own).
+Still rough: only the host can take jobs, and money and inventory are per player. The tire changer, wheel balancer and repair table work on your own inventory, so each player uses their own.
 
 ## Install
 

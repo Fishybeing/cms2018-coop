@@ -22,7 +22,7 @@ namespace CMS2018Coop
 
     internal class Session
     {
-        public const byte ProtocolVersion = 3;
+        public const byte ProtocolVersion = 4;
         public const byte MsgHello = 1;
         public const byte MsgState = 2;
         public const byte MsgBye = 3;

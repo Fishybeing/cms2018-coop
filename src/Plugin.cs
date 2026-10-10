@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace CMS2018Coop
 {
-    [BepInPlugin("fishybeing.cms2018coop", "CMS 2018 Co-op", "0.2.0")]
+    [BepInPlugin("fishybeing.cms2018coop", "CMS 2018 Co-op", "0.5.0")]
     public class Plugin : BaseUnityPlugin
     {
         internal static Plugin Instance;

@@ -15,6 +15,7 @@ namespace CMS2018Coop
         public const byte MsgPart = 13;
         public const byte MsgBody = 14;
         public const byte MsgLift = 15;
+        public const byte MsgCarProps = 16;
 
         public static bool Applying;
 
@@ -38,6 +39,7 @@ namespace CMS2018Coop
         private readonly Dictionary<string, CarLifter> lifters = new Dictionary<string, CarLifter>();
         private readonly Dictionary<string, int> pendingLifts = new Dictionary<string, int>();
         private readonly Dictionary<string, float> liftMismatchSince = new Dictionary<string, float>();
+        private readonly Dictionary<string, float> placeMismatchSince = new Dictionary<string, float>();
         private int nextSerial = 1;
         private string lastScene = "";
         private float manifestTimer;
@@ -60,6 +62,7 @@ namespace CMS2018Coop
             public readonly Dictionary<string, PartScript> Index = new Dictionary<string, PartScript>();
             public readonly Dictionary<string, PartState> Parts = new Dictionary<string, PartState>();
             public readonly Dictionary<string, BodyState> Body = new Dictionary<string, BodyState>();
+            public CarProps Props;
         }
 
         private struct PartState
@@ -68,10 +71,14 @@ namespace CMS2018Coop
             public int Condition;
             public int Quality;
             public string Tuned;
+            public bool Painted;
+            public int PaintType;
+            public uint Color;
 
             public bool Same(PartState o)
             {
-                return Unmounted == o.Unmounted && Condition == o.Condition && Quality == o.Quality && Tuned == o.Tuned;
+                return Unmounted == o.Unmounted && Condition == o.Condition && Quality == o.Quality && Tuned == o.Tuned
+                    && Painted == o.Painted && PaintType == o.PaintType && Color == o.Color;
             }
         }
 
@@ -80,11 +87,42 @@ namespace CMS2018Coop
             public bool Unmounted;
             public bool Switched;
             public int Condition;
+            public uint Color;
+            public int PaintType;
+            public string Livery;
+            public int LiveryStrength;
 
             public bool Same(BodyState o)
             {
-                return Unmounted == o.Unmounted && Switched == o.Switched && Condition == o.Condition;
+                return Unmounted == o.Unmounted && Switched == o.Switched && Condition == o.Condition
+                    && Color == o.Color && PaintType == o.PaintType && Livery == o.Livery && LiveryStrength == o.LiveryStrength;
             }
+        }
+
+        private struct CarProps
+        {
+            public int Place;
+            public int Oil;
+            public int OilCondition;
+
+            public bool Same(CarProps o)
+            {
+                return Place == o.Place && Oil == o.Oil && OilCondition == o.OilCondition;
+            }
+        }
+
+        private static uint Pack(Color c)
+        {
+            uint r = (uint)Mathf.RoundToInt(Mathf.Clamp01(c.r) * 255f);
+            uint g = (uint)Mathf.RoundToInt(Mathf.Clamp01(c.g) * 255f);
+            uint b = (uint)Mathf.RoundToInt(Mathf.Clamp01(c.b) * 255f);
+            uint a = (uint)Mathf.RoundToInt(Mathf.Clamp01(c.a) * 255f);
+            return r | (g << 8) | (b << 16) | (a << 24);
+        }
+
+        private static Color Unpack(uint v)
+        {
+            return new Color((v & 0xff) / 255f, ((v >> 8) & 0xff) / 255f, ((v >> 16) & 0xff) / 255f, ((v >> 24) & 0xff) / 255f);
         }
 
         public CarSync(Session session)
@@ -109,6 +147,7 @@ namespace CMS2018Coop
             lifters.Clear();
             pendingLifts.Clear();
             liftMismatchSince.Clear();
+            placeMismatchSince.Clear();
             Summary = "";
         }
 
@@ -295,7 +334,7 @@ namespace CMS2018Coop
 
         private void SendManifest()
         {
-            List<KeyValuePair<string, int>> entries = new List<KeyValuePair<string, int>>();
+            List<CarLoader> entries = new List<CarLoader>();
             foreach (CarLoader l in loaders.Values)
             {
                 if (l == null || !l.IsCarLoaded()) continue;
@@ -307,16 +346,17 @@ namespace CMS2018Coop
                     hostSerials[l.name] = nextSerial++;
                     known.Remove(l.name);
                 }
-                entries.Add(new KeyValuePair<string, int>(l.name, hostSerials[l.name]));
+                entries.Add(l);
             }
 
             BinaryWriter w = session.Begin(MsgManifest);
             w.Write(LocalPlayer.SceneName());
             w.Write(entries.Count);
-            foreach (KeyValuePair<string, int> e in entries)
+            foreach (CarLoader l in entries)
             {
-                w.Write(e.Key);
-                w.Write(e.Value);
+                w.Write(l.name);
+                w.Write(hostSerials[l.name]);
+                w.Write(l.GetPlaceNo());
             }
             w.Write(lifters.Count);
             foreach (KeyValuePair<string, CarLifter> kv in lifters)
@@ -357,6 +397,9 @@ namespace CMS2018Coop
                 case MsgLift:
                     OnLift(from, r);
                     break;
+                case MsgCarProps:
+                    OnCarProps(from, r);
+                    break;
             }
         }
 
@@ -366,10 +409,12 @@ namespace CMS2018Coop
             string scene = r.ReadString();
             int count = r.ReadInt32();
             Dictionary<string, int> entries = new Dictionary<string, int>();
+            Dictionary<string, int> places = new Dictionary<string, int>();
             for (int i = 0; i < count; i++)
             {
                 string name = r.ReadString();
                 entries[name] = r.ReadInt32();
+                places[name] = r.ReadInt32();
             }
             int liftCount = r.ReadInt32();
             List<KeyValuePair<string, int>> liftPos = new List<KeyValuePair<string, int>>();
@@ -401,6 +446,7 @@ namespace CMS2018Coop
                 if (applied.TryGetValue(e.Key, out have) && have == e.Value)
                 {
                     done++;
+                    if (!loading.Contains(e.Key)) ReconcilePlace(e.Key, places[e.Key]);
                     continue;
                 }
                 if (loading.Contains(e.Key) || Loader(e.Key) == null) continue;
@@ -562,6 +608,7 @@ namespace CMS2018Coop
                 if (cp == null || cp.handle == null || cs.Body.ContainsKey(cp.name)) continue;
                 cs.Body[cp.name] = Read(cp);
             }
+            cs.Props = ReadProps(l);
             known[l.name] = cs;
             return cs;
         }
@@ -590,6 +637,12 @@ namespace CMS2018Coop
                 cs.Body[cp.name] = now;
                 SendBody(l.name, cp.name, now, 0);
             }
+            CarProps props = ReadProps(l);
+            if (!props.Same(cs.Props))
+            {
+                cs.Props = props;
+                SendProps(l.name, props, 0);
+            }
         }
 
         private static PartState Read(PartScript ps)
@@ -599,7 +652,10 @@ namespace CMS2018Coop
                 Unmounted = ps.IsUnmounted(),
                 Condition = Mathf.RoundToInt(ps.GetCondition() * 1000f),
                 Quality = ps.GetQuality(),
-                Tuned = ps.GetTunedID() ?? ""
+                Tuned = ps.GetTunedID() ?? "",
+                Painted = ps.IsPainted,
+                PaintType = (int)ps.CurrentPaintType,
+                Color = ps.IsPainted ? Pack(ps.GetColor()) : 0u
             };
         }
 
@@ -609,8 +665,120 @@ namespace CMS2018Coop
             {
                 Unmounted = cp.unmounted,
                 Switched = cp.switched,
-                Condition = Mathf.RoundToInt(cp.condition * 1000f)
+                Condition = Mathf.RoundToInt(cp.condition * 1000f),
+                Color = Pack(cp.color),
+                PaintType = cp.paintType,
+                Livery = cp.livery ?? "",
+                LiveryStrength = Mathf.RoundToInt(cp.liveryStrength * 1000f)
             };
+        }
+
+        private static CarProps ReadProps(CarLoader l)
+        {
+            return new CarProps
+            {
+                Place = l.GetPlaceNo(),
+                Oil = Mathf.RoundToInt(l.GetOilLevel() * 1000f),
+                OilCondition = Mathf.RoundToInt(l.GetOilCondition() * 1000f)
+            };
+        }
+
+        private void SendProps(string car, CarProps p, ulong except)
+        {
+            BinaryWriter w = session.Begin(MsgCarProps);
+            w.Write(car);
+            w.Write(SerialFor(car));
+            w.Write(p.Place);
+            w.Write(p.Oil);
+            w.Write(p.OilCondition);
+            Route(except);
+        }
+
+        private void OnCarProps(ulong from, BinaryReader r)
+        {
+            string car = r.ReadString();
+            int serial = r.ReadInt32();
+            CarProps p = new CarProps { Place = r.ReadInt32(), Oil = r.ReadInt32(), OilCondition = r.ReadInt32() };
+
+            if (!InGarage() || !Syncable(car) || SerialFor(car) != serial) return;
+            CarLoader l = Loader(car);
+            if (l == null) return;
+            CarState cs = StateFor(l);
+            if (cs == null) return;
+
+            try
+            {
+                if (p.Place >= 0 && p.Place != l.GetPlaceNo()) MoveCar(l, p.Place);
+                if (p.Oil != Mathf.RoundToInt(l.GetOilLevel() * 1000f) || p.OilCondition != Mathf.RoundToInt(l.GetOilCondition() * 1000f))
+                {
+                    l.SetOilLevelAndCondition(p.Oil / 1000f, p.OilCondition / 1000f);
+                }
+            }
+            catch (Exception e)
+            {
+                session.Log.LogWarning("Could not apply car state for " + car + ": " + e.Message);
+            }
+            cs.Props = ReadProps(l);
+            if (session.IsHost) SendProps(car, p, from);
+        }
+
+        private void MoveCar(CarLoader l, int place)
+        {
+            CarLoaderPlaces places = CarLoaderPlaces.Get();
+            if (places == null) return;
+            int before = l.GetPlaceNo();
+            if (!session.IsHost && places.GetOccupied((CarPlace)place)) ClearSpot(places, l, place);
+            if (place >= 2 && place <= 4) l.CloseCar();
+            l.ChangePosition(place);
+            RememberProps(l);
+            if (l.GetPlaceNo() == place) session.Log.LogInfo("Moved " + l.name + " from spot " + before + " to " + place);
+            else session.Log.LogWarning("Could not move " + l.name + " to spot " + place + ", it looks occupied here");
+        }
+
+        private void ClearSpot(CarLoaderPlaces places, CarLoader mover, int place)
+        {
+            CarLoader blocker = places.GetCarLoaderForPlace((CarPlace)place);
+            if (blocker == null || blocker == mover) return;
+            try
+            {
+                for (int spot = 0; spot < 8; spot++)
+                {
+                    if (spot == place || places.GetOccupied((CarPlace)spot)) continue;
+                    blocker.ChangePosition(spot);
+                    RememberProps(blocker);
+                    session.Log.LogInfo("Moved " + blocker.name + " out of spot " + place + " to spot " + spot + " to make room");
+                    return;
+                }
+            }
+            catch (Exception e)
+            {
+                session.Log.LogWarning("Could not make room in spot " + place + ": " + e.Message);
+            }
+        }
+
+        private void RememberProps(CarLoader l)
+        {
+            CarState cs;
+            if (known.TryGetValue(l.name, out cs)) cs.Props = ReadProps(l);
+        }
+
+        private void ReconcilePlace(string car, int hostPlace)
+        {
+            CarLoader l = Loader(car);
+            if (l == null || l.GetRoot() == null || hostPlace < 0 || l.GetPlaceNo() == hostPlace)
+            {
+                placeMismatchSince.Remove(car);
+                return;
+            }
+            float since;
+            if (!placeMismatchSince.TryGetValue(car, out since))
+            {
+                placeMismatchSince[car] = Time.unscaledTime;
+                return;
+            }
+            if (Time.unscaledTime - since < 1.5f) return;
+            placeMismatchSince[car] = Time.unscaledTime + 5f;
+            MoveCar(l, hostPlace);
         }
 
         private void SendPart(string car, string path, PartState s, ulong except)
@@ -623,6 +791,9 @@ namespace CMS2018Coop
             w.Write(s.Condition);
             w.Write(s.Quality);
             w.Write(s.Tuned);
+            w.Write(s.Painted);
+            w.Write(s.PaintType);
+            w.Write(s.Color);
             Route(except);
         }
 
@@ -635,6 +806,10 @@ namespace CMS2018Coop
             w.Write(s.Unmounted);
             w.Write(s.Switched);
             w.Write(s.Condition);
+            w.Write(s.Color);
+            w.Write(s.PaintType);
+            w.Write(s.Livery ?? "");
+            w.Write(s.LiveryStrength);
             Route(except);
         }
 
@@ -649,7 +824,7 @@ namespace CMS2018Coop
             string car = r.ReadString();
             int serial = r.ReadInt32();
             string path = r.ReadString();
-            PartState s = new PartState { Unmounted = r.ReadBoolean(), Condition = r.ReadInt32(), Quality = r.ReadInt32(), Tuned = r.ReadString() };
+            PartState s = new PartState { Unmounted = r.ReadBoolean(), Condition = r.ReadInt32(), Quality = r.ReadInt32(), Tuned = r.ReadString(), Painted = r.ReadBoolean(), PaintType = r.ReadInt32(), Color = r.ReadUInt32() };
 
             if (!InGarage() || !Syncable(car) || SerialFor(car) != serial) return;
             CarLoader l = Loader(car);
@@ -698,6 +873,18 @@ namespace CMS2018Coop
             }
             if (Mathf.RoundToInt(ps.GetCondition() * 1000f) != s.Condition) ps.SetCondition(s.Condition / 1000f);
             if (ps.GetQuality() != s.Quality) ps.SetQuality(s.Quality);
+            bool paintChanged = s.Painted != ps.IsPainted || s.PaintType != (int)ps.CurrentPaintType || (s.Painted && s.Color != Pack(ps.GetColor()));
+            if (paintChanged)
+            {
+                ps.IsPainted = s.Painted;
+                ps.CurrentPaintType = (PaintType)s.PaintType;
+                if (s.Painted)
+                {
+                    Color c = Unpack(s.Color);
+                    ps.SetColor(c);
+                    CarHelper.SetPartPaintType(ps.gameObject, ps.CurrentPaintType, c);
+                }
+            }
         }
 
         private void OnBody(ulong from, BinaryReader r)
@@ -705,7 +892,7 @@ namespace CMS2018Coop
             string car = r.ReadString();
             int serial = r.ReadInt32();
             string name = r.ReadString();
-            BodyState s = new BodyState { Unmounted = r.ReadBoolean(), Switched = r.ReadBoolean(), Condition = r.ReadInt32() };
+            BodyState s = new BodyState { Unmounted = r.ReadBoolean(), Switched = r.ReadBoolean(), Condition = r.ReadInt32(), Color = r.ReadUInt32(), PaintType = r.ReadInt32(), Livery = r.ReadString(), LiveryStrength = r.ReadInt32() };
 
             if (!InGarage() || !Syncable(car) || SerialFor(car) != serial) return;
             CarLoader l = Loader(car);
@@ -723,6 +910,18 @@ namespace CMS2018Coop
                 {
                     l.SetCondition(cp, s.Condition / 1000f);
                     l.UpdateCarBodyPart(cp);
+                }
+                if (s.PaintType != cp.paintType || s.Color != Pack(cp.color))
+                {
+                    Color c = Unpack(s.Color);
+                    cp.paintType = s.PaintType;
+                    if (!l.SetCarColor(cp, c)) cp.color = c;
+                }
+                if (s.Livery != (cp.livery ?? "") || s.LiveryStrength != Mathf.RoundToInt(cp.liveryStrength * 1000f))
+                {
+                    l.SetCarLivery(cp, s.Livery, s.LiveryStrength / 1000f);
+                    cp.livery = s.Livery;
+                    cp.liveryStrength = s.LiveryStrength / 1000f;
                 }
             }
             catch (Exception e)

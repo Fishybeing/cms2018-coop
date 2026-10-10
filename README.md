@@ -11,19 +11,19 @@ A multiplayer mod for Car Mechanic Simulator 2018. Up to 4 people work in the sa
 - Shared garage: the host's cars are copied to everyone when they load in.
 - Parts coming off and going on, part condition, doors, hood and trunk stay in sync.
 - Car lifts go up and down for everyone at the same time.
+- Moving a car between spots (lifts, paint booth, dyno), paint, liveries and oil stay in sync.
 - Hold Shift to sprint (1.2x speed, no stamina).
 - A guest's own save is backed up when they join and restored the next time they start the game.
 
-Still rough: only the host can take jobs, money and inventory are per player, and things like the paint shop and tire changer are not synced yet.
+Still rough: only the host can take jobs, money and inventory are per player, and things like the paint shop and tire changer are not synced yet (those work on your own inventory, so each player uses their own).
 
 ## Install
 
 1. Download the zip from [Releases](../../releases).
-2. In Steam, right-click Car Mechanic Simulator 2018, then Manage > Browse local files.
-3. Extract the zip into that folder, next to `cms2018.exe`.
-4. Start the game. A "CMS 2018 Co-op" box in the top-left corner means it loaded.
+2. Extract it anywhere and double-click `INSTALL.bat`. It finds the game through Steam (any library drive) and copies the mod in. If it can't find the game it asks for the folder.
+3. Start the game. A "CMS 2018 Co-op" box in the top-left corner means it loaded.
 
-Everyone needs the same version.
+`UNINSTALL.bat` removes it again. Everyone needs the same version.
 
 | Key | Action |
 | --- | --- |
